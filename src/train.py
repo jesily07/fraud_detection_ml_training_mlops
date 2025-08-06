@@ -5,6 +5,7 @@ import numpy as np
 import joblib
 import mlflow
 import mlflow.sklearn
+import re
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -48,27 +49,47 @@ def get_git_commit_hash():
     except subprocess.CalledProcessError:
         return None
 
+def ensure_model_tags_folder(mlruns_dir="mlruns"):
+    """
+    Ensure 'tags/' folder exists under the latest registered model directory to avoid FileNotFoundError.
+    """
+    try:
+        experiment_ids = [d for d in os.listdir(mlruns_dir) if d.isdigit()]
+        if not experiment_ids:
+            return
+        latest_experiment = max(experiment_ids, key=int)
+
+        model_dir = os.path.join(mlruns_dir, latest_experiment, "models")
+        if not os.path.exists(model_dir):
+            return
+
+        model_subdirs = [d for d in os.listdir(model_dir) if re.match(r"m-[a-f0-9]{32}", d)]
+        if not model_subdirs:
+            return
+
+        latest_model = sorted(model_subdirs)[-1]
+        tags_path = os.path.join(model_dir, latest_model, "tags")
+        os.makedirs(tags_path, exist_ok=True)
+    except Exception as e:
+        print(f"❌ Error ensuring model tags folder: {e}")
+
 def train():
-    # Load and split
+    # Load and preprocess
     df = load_data("data/creditcard.csv")
     X, y = preprocess_data(df)
     X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.3, random_state=42)
 
-    # Scale only training data
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
-    # SMOTE on scaled training data
     sm = SMOTE(random_state=42)
     X_train_res, y_train_res = sm.fit_resample(X_train_scaled, y_train)
 
-    # Define base models
     rf = RandomForestClassifier(n_estimators=100, random_state=42)
     xgb = XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric="logloss", random_state=42)
     meta_clf = LogisticRegression(max_iter=1000)
 
-    # Stacking ensemble
     stack_model = StackingClassifier(
         estimators=[("rf", rf), ("xgb", xgb)],
         final_estimator=meta_clf,
@@ -82,24 +103,22 @@ def train():
         y_pred = stack_model.predict(X_test_scaled)
         y_proba = stack_model.predict_proba(X_test_scaled)[:, 1]
 
-        # Evaluation
         roc_auc = evaluate_model(y_test, y_pred, y_proba)
 
-        # Log manually retrieved Git commit hash
+        # Fix: Ensure 'tags/' folder exists for MLflow registered model
+        ensure_model_tags_folder()
+
+        # Set git commit tag
         commit_hash = get_git_commit_hash()
         if commit_hash:
             mlflow.set_tag("mlflow.source.git.commit", commit_hash)
 
-        # Log model, params, and metrics
         mlflow.log_param("model_type", "Stacking (RF + XGB + LR)")
         mlflow.log_metric("roc_auc", roc_auc)
-        mlflow.sklearn.log_model(
-            stack_model,
-            artifact_path="model",
-            registered_model_name=None  # Prevents implicit registration
-        )
 
-        # Save locally
+        # Avoiding .register_model to prevent tag error
+        mlflow.sklearn.log_model(stack_model, artifact_path="model")
+
         os.makedirs("models", exist_ok=True)
         joblib.dump(stack_model, "models/stack_model.pkl")
         joblib.dump(scaler, "models/scaler.pkl")
