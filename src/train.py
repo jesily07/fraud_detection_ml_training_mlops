@@ -25,14 +25,14 @@ def preprocess_data(df):
     return X, y
 
 def evaluate_model(y_test, y_pred, y_proba):
-    print("\n📊 Confusion Matrix:")
+    print("\n Confusion Matrix:")
     print(confusion_matrix(y_test, y_pred))
 
-    print("\n📄 Classification Report:")
+    print("\n Classification Report:")
     print(classification_report(y_test, y_pred))
 
     roc_auc = roc_auc_score(y_test, y_proba)
-    print(f"\n🎯 ROC-AUC Score: {roc_auc:.4f}")
+    print(f"\n ROC-AUC Score: {roc_auc:.4f}")
     return roc_auc
 
 def get_git_commit_hash():
@@ -96,7 +96,7 @@ def train():
         mlflow.sklearn.log_model(
             stack_model,
             artifact_path="model",
-            registered_model_name=None  # ✅ Prevents implicit registration
+            registered_model_name=None  # Prevents implicit registration
         )
 
         # Save locally
@@ -104,7 +104,7 @@ def train():
         joblib.dump(stack_model, "models/stack_model.pkl")
         joblib.dump(scaler, "models/scaler.pkl")
 
-        print("\n✅ Training complete. Model + Scaler saved.")
+        print("\n Training complete. Model + Scaler saved.")
 
 if __name__ == "__main__":
     train()
