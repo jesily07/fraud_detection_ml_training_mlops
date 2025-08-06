@@ -81,7 +81,6 @@ def train():
         estimators=[("rf", rf), ("xgb", xgb)],
         final_estimator=meta_clf,
         cv=5,
-        n_jobs=-1
     )
 
     with mlflow.start_run() as run:
