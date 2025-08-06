@@ -17,13 +17,16 @@ from imblearn.over_sampling import SMOTE
 
 mlflow.set_experiment("fraud_detection_stack")
 
+
 def load_data(filepath):
     return pd.read_csv(filepath)
+
 
 def preprocess_data(df):
     X = df.drop("Class", axis=1)
     y = df["Class"]
     return X, y
+
 
 def evaluate_model(y_test, y_pred, y_proba):
     print("\n Confusion Matrix:")
@@ -35,6 +38,7 @@ def evaluate_model(y_test, y_pred, y_proba):
     roc_auc = roc_auc_score(y_test, y_proba)
     print(f"\n ROC-AUC Score: {roc_auc:.4f}")
     return roc_auc
+
 
 def get_git_commit_hash():
     try:
@@ -48,6 +52,7 @@ def get_git_commit_hash():
         return result.stdout.strip()
     except subprocess.CalledProcessError:
         return None
+
 
 def ensure_model_tags_folder(mlruns_dir="mlruns"):
     """
@@ -73,6 +78,7 @@ def ensure_model_tags_folder(mlruns_dir="mlruns"):
     except Exception as e:
         print(f"❌ Error ensuring model tags folder: {e}")
 
+
 def train():
     # Load and preprocess
     df = load_data("data/creditcard.csv")
@@ -97,7 +103,7 @@ def train():
         n_jobs=-1
     )
 
-    with mlflow.start_run():
+    with mlflow.start_run() as run:
         stack_model.fit(X_train_res, y_train_res)
 
         y_pred = stack_model.predict(X_test_scaled)
@@ -105,10 +111,10 @@ def train():
 
         roc_auc = evaluate_model(y_test, y_pred, y_proba)
 
-        # Fix: Ensure 'tags/' folder exists for MLflow registered model
+        # Ensure tags folder to avoid FileNotFoundError
         ensure_model_tags_folder()
 
-        # Set git commit tag
+        # Git commit tag
         commit_hash = get_git_commit_hash()
         if commit_hash:
             mlflow.set_tag("mlflow.source.git.commit", commit_hash)
@@ -116,14 +122,20 @@ def train():
         mlflow.log_param("model_type", "Stacking (RF + XGB + LR)")
         mlflow.log_metric("roc_auc", roc_auc)
 
-        # Avoiding .register_model to prevent tag error
-        mlflow.sklearn.log_model(stack_model, artifact_path="model")
+        # Automatically register model to model registry
+        mlflow.sklearn.log_model(
+            stack_model,
+            artifact_path="model",
+            registered_model_name="fraud_detection_model"
+        )
 
         os.makedirs("models", exist_ok=True)
         joblib.dump(stack_model, "models/stack_model.pkl")
         joblib.dump(scaler, "models/scaler.pkl")
 
         print("\n Training complete. Model + Scaler saved.")
+        print(f" MLflow Run ID: {run.info.run_id}")
+
 
 if __name__ == "__main__":
     train()
