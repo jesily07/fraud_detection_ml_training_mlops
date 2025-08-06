@@ -5,7 +5,6 @@ import numpy as np
 import joblib
 import mlflow
 import mlflow.sklearn
-import re
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -54,37 +53,15 @@ def get_git_commit_hash():
         return None
 
 
-def ensure_model_tags_folder(mlruns_dir="mlruns"):
-    """
-    Ensure 'tags/' folder exists under the latest registered model directory to avoid FileNotFoundError.
-    """
-    try:
-        experiment_ids = [d for d in os.listdir(mlruns_dir) if d.isdigit()]
-        if not experiment_ids:
-            return
-        latest_experiment = max(experiment_ids, key=int)
-
-        model_dir = os.path.join(mlruns_dir, latest_experiment, "models")
-        if not os.path.exists(model_dir):
-            return
-
-        model_subdirs = [d for d in os.listdir(model_dir) if re.match(r"m-[a-f0-9]{32}", d)]
-        if not model_subdirs:
-            return
-
-        latest_model = sorted(model_subdirs)[-1]
-        tags_path = os.path.join(model_dir, latest_model, "tags")
-        os.makedirs(tags_path, exist_ok=True)
-    except Exception as e:
-        print(f"❌ Error ensuring model tags folder: {e}")
-
-
 def train():
     # Load and preprocess
     df = load_data("data/creditcard.csv")
     X, y = preprocess_data(df)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.3, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, stratify=y, test_size=0.3, random_state=42
+    )
 
+    # Scale and apply SMOTE
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
@@ -92,6 +69,7 @@ def train():
     sm = SMOTE(random_state=42)
     X_train_res, y_train_res = sm.fit_resample(X_train_scaled, y_train)
 
+    # Define models
     rf = RandomForestClassifier(n_estimators=100, random_state=42)
     xgb = XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric="logloss", random_state=42)
     meta_clf = LogisticRegression(max_iter=1000)
@@ -103,38 +81,49 @@ def train():
         n_jobs=-1
     )
 
+    # Start MLflow run
     with mlflow.start_run() as run:
         stack_model.fit(X_train_res, y_train_res)
-
         y_pred = stack_model.predict(X_test_scaled)
         y_proba = stack_model.predict_proba(X_test_scaled)[:, 1]
 
+        # Evaluate
         roc_auc = evaluate_model(y_test, y_pred, y_proba)
-
-        # Ensure tags folder to avoid FileNotFoundError
-        ensure_model_tags_folder()
 
         # Git commit tag
         commit_hash = get_git_commit_hash()
         if commit_hash:
             mlflow.set_tag("mlflow.source.git.commit", commit_hash)
 
+        # Log artifacts
         mlflow.log_param("model_type", "Stacking (RF + XGB + LR)")
         mlflow.log_metric("roc_auc", roc_auc)
 
-        # Automatically register model to model registry
-        mlflow.sklearn.log_model(
-            stack_model,
-            artifact_path="model",
-            registered_model_name="fraud_detection_model"
-        )
+        # Fix: Forcefully write missing commit tag file to model tags directory
+        if commit_hash:
+            experiment = mlflow.get_experiment_by_name("fraud_detection_stack")
+            run_id = run.info.run_id
+            if experiment:
+                experiment_id = experiment.experiment_id
+                model_root = os.path.join("mlruns", experiment_id, "models")
+                if os.path.exists(model_root):
+                    for model_dir in os.listdir(model_root):
+                        tags_path = os.path.join(model_root, model_dir, "tags")
+                        os.makedirs(tags_path, exist_ok=True)
+                        commit_tag_path = os.path.join(tags_path, "mlflow.source.git.commit")
+                        if not os.path.exists(commit_tag_path):
+                            with open(commit_tag_path, "w", encoding="utf-8") as f:
+                                f.write(commit_hash)
 
+        # Register model to MLflow
+        mlflow.sklearn.log_model(stack_model, artifact_path="model")
+
+        # Save locally
         os.makedirs("models", exist_ok=True)
         joblib.dump(stack_model, "models/stack_model.pkl")
         joblib.dump(scaler, "models/scaler.pkl")
 
         print("\n Training complete. Model + Scaler saved.")
-        print(f" MLflow Run ID: {run.info.run_id}")
 
 
 if __name__ == "__main__":
