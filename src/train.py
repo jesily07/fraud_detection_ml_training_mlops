@@ -6,8 +6,6 @@ import joblib
 import mlflow
 import mlflow.sklearn
 from mlflow.tracking import MlflowClient
-from mlflow.exceptions import RestException
-
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier, StackingClassifier
@@ -18,7 +16,6 @@ from imblearn.over_sampling import SMOTE
 
 mlflow.set_experiment("fraud_detection_stack")
 
-# -------------------- Utility Functions -------------------- #
 def load_data(filepath):
     return pd.read_csv(filepath)
 
@@ -50,28 +47,32 @@ def get_git_commit_hash():
         return None
 
 def write_commit_tag(exp_id, model_uuid, commit_hash):
-    """Write commit hash into the correct MLflow model tags folder."""
+    """Create tags directory and write commit hash before MLflow logs the model."""
     tag_dir = os.path.join("mlruns", str(exp_id), "models", f"m-{model_uuid}", "tags")
     os.makedirs(tag_dir, exist_ok=True)
     tag_file = os.path.join(tag_dir, "mlflow.source.git.commit")
     with open(tag_file, "w", encoding="utf-8") as f:
-        f.write(commit_hash or "")
+        f.write(commit_hash)
+    # Verification
+    if os.path.exists(tag_file):
+        print(f"✔ Commit tag written successfully → {tag_file}")
 
-# -------------------- Main Training -------------------- #
 def train():
+    # Load data
     df = load_data("data/creditcard.csv")
     X, y = preprocess_data(df)
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, stratify=y, test_size=0.3, random_state=42
-    )
+    X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.3, random_state=42)
 
+    # Scale
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
+    # SMOTE
     sm = SMOTE(random_state=42)
     X_train_res, y_train_res = sm.fit_resample(X_train_scaled, y_train)
 
+    # Models
     rf = RandomForestClassifier(n_estimators=100, random_state=42)
     xgb = XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric="logloss", random_state=42)
     meta_clf = LogisticRegression(max_iter=1000)
@@ -98,33 +99,33 @@ def train():
         mlflow.log_metric("roc_auc", roc_auc)
 
         client = MlflowClient()
+
+        # Ensure registered model exists
         try:
             client.create_registered_model("fraud_stack_model")
-        except RestException:
-            pass  # Ignore if model already exists
+        except Exception:
+            pass  # Already exists
 
-        # Create a placeholder model version so MLflow generates the model UUID
-        model_source = os.path.join("models", "stack_model.pkl")
-        os.makedirs("models", exist_ok=True)
-        joblib.dump(stack_model, model_source)
-
+        # Pre-create model version to get real UUID
         mv = client.create_model_version(
             name="fraud_stack_model",
-            source=model_source,
+            source=mlflow.get_artifact_uri(),  # Temporary placeholder
             run_id=run.info.run_id
         )
 
-        # Write commit hash into exact MLflow folder
-        write_commit_tag(run.info.experiment_id, mv.version_uuid, commit_hash)
+        # Pre-create tags folder with commit hash before logging the model
+        if commit_hash:
+            write_commit_tag(run.info.experiment_id, mv.version_uuid, commit_hash)
 
-        # Now log model (folder already exists → no FileNotFoundError)
+        # Now log the model safely
         mlflow.sklearn.log_model(stack_model, artifact_path="model")
 
-        # Save scaler locally
+        # Save locally
+        os.makedirs("models", exist_ok=True)
+        joblib.dump(stack_model, "models/stack_model.pkl")
         joblib.dump(scaler, "models/scaler.pkl")
 
-        print(f"\n Training complete. Model + Scaler saved.")
-        print(f" Commit hash written to: mlruns/{run.info.experiment_id}/models/m-{mv.version_uuid}/tags")
+        print("\n Training complete. Model + Scaler saved.")
 
 if __name__ == "__main__":
     train()
