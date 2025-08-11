@@ -56,6 +56,8 @@ def write_commit_tag(exp_id, model_uuid, commit_hash):
     # Verification
     if os.path.exists(tag_file):
         print(f"✔ Commit tag written successfully → {tag_file}")
+    else:
+        print("❌ Commit tag write failed!")
 
 def train():
     # Load data
@@ -106,16 +108,17 @@ def train():
         except Exception:
             pass  # Already exists
 
-        # Pre-create model version to get real UUID
+        # Force creation of model folder & retrieve actual UUID
         mv = client.create_model_version(
             name="fraud_stack_model",
-            source=mlflow.get_artifact_uri(),  # Temporary placeholder
+            source=mlflow.get_artifact_uri(),  # temp placeholder
             run_id=run.info.run_id
         )
+        real_model_uuid = mv.version_uuid  # actual MLflow model folder UUID
 
         # Pre-create tags folder with commit hash before logging the model
         if commit_hash:
-            write_commit_tag(run.info.experiment_id, mv.version_uuid, commit_hash)
+            write_commit_tag(run.info.experiment_id, real_model_uuid, commit_hash)
 
         # Now log the model safely
         mlflow.sklearn.log_model(stack_model, artifact_path="model")
