@@ -15,7 +15,7 @@ def load_data(filepath):
 def preprocess_data(df):
     X = df.drop("Class", axis=1)
     y = df["Class"]
-    return X, y
+    return X, y 
 
 def evaluate_model(y_test, y_pred, y_proba):
     print("\n Confusion Matrix:")
