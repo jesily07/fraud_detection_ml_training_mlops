@@ -1,7 +1,7 @@
 import os
 import subprocess
+import warnings
 import pandas as pd
-import numpy as np
 import joblib
 import mlflow
 import mlflow.sklearn
@@ -13,6 +13,11 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
 from xgboost import XGBClassifier
 from imblearn.over_sampling import SMOTE
+
+# Suppress annoying warnings from XGBoost and sklearn
+warnings.filterwarnings("ignore", category=UserWarning, module="xgboost")
+warnings.filterwarnings("ignore", category=FutureWarning)
+os.environ["XGB_ENABLE_CPP_EXCEPTIONS"] = "1"
 
 mlflow.set_experiment("fraud_detection_stack")
 
@@ -46,18 +51,28 @@ def get_git_commit_hash():
     except subprocess.CalledProcessError:
         return None
 
-def write_commit_tag(exp_id, model_uuid, commit_hash):
-    """Create tags directory and write commit hash before MLflow logs the model."""
-    tag_dir = os.path.join("mlruns", str(exp_id), "models", f"m-{model_uuid}", "tags")
+def write_commit_tag(exp_id, model_folder_name, commit_hash):
+    """Create tags directory and write commit hash."""
+    tag_dir = os.path.join("mlruns", str(exp_id), "models", model_folder_name, "tags")
     os.makedirs(tag_dir, exist_ok=True)
     tag_file = os.path.join(tag_dir, "mlflow.source.git.commit")
     with open(tag_file, "w", encoding="utf-8") as f:
         f.write(commit_hash)
     # Verification
     if os.path.exists(tag_file):
-        print(f"✔ Commit tag written successfully → {tag_file}")
+        print(f" Commit tag written successfully → {tag_file}")
     else:
-        print("❌ Commit tag write failed!")
+        print(" Commit tag write failed!")
+
+def find_new_model_folder(exp_id, before_folders):
+    """Find the new model folder created by MLflow by comparing before/after folder lists."""
+    models_dir = os.path.join("mlruns", str(exp_id), "models")
+    after_folders = set(os.listdir(models_dir)) if os.path.exists(models_dir) else set()
+    new_folders = after_folders - before_folders
+    for folder in new_folders:
+        if folder.startswith("m-"):
+            return folder
+    return None
 
 def train():
     # Load data
@@ -76,7 +91,13 @@ def train():
 
     # Models
     rf = RandomForestClassifier(n_estimators=100, random_state=42)
-    xgb = XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric="logloss", random_state=42)
+    xgb = XGBClassifier(
+        n_estimators=100,
+        use_label_encoder=False,
+        eval_metric="logloss",
+        random_state=42,
+        verbosity=0  # Silence internal logs
+    )
     meta_clf = LogisticRegression(max_iter=1000)
 
     stack_model = StackingClassifier(
@@ -108,19 +129,27 @@ def train():
         except Exception:
             pass  # Already exists
 
-        # Force creation of model folder & retrieve actual UUID
-        mv = client.create_model_version(
+        # Snapshot existing model folders
+        models_dir = os.path.join("mlruns", str(run.info.experiment_id), "models")
+        before_folders = set(os.listdir(models_dir)) if os.path.exists(models_dir) else set()
+
+        # Force creation of model version
+        client.create_model_version(
             name="fraud_stack_model",
-            source=mlflow.get_artifact_uri(),  # temp placeholder
+            source=mlflow.get_artifact_uri(),
             run_id=run.info.run_id
         )
-        real_model_uuid = mv.version_uuid  # actual MLflow model folder UUID
 
-        # Pre-create tags folder with commit hash before logging the model
-        if commit_hash:
-            write_commit_tag(run.info.experiment_id, real_model_uuid, commit_hash)
+        # Find the exact new model folder
+        model_folder_name = find_new_model_folder(run.info.experiment_id, before_folders)
 
-        # Now log the model safely
+        # Pre-create commit tag
+        if commit_hash and model_folder_name:
+            write_commit_tag(run.info.experiment_id, model_folder_name, commit_hash)
+        elif commit_hash:
+            print("⚠ Could not determine model folder for commit tag.")
+
+        # Log model
         mlflow.sklearn.log_model(stack_model, artifact_path="model")
 
         # Save locally
