@@ -1,7 +1,7 @@
 import os
 import subprocess
-import warnings
 import pandas as pd
+import numpy as np
 import joblib
 import mlflow
 import mlflow.sklearn
@@ -13,30 +13,35 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
 from xgboost import XGBClassifier
 from imblearn.over_sampling import SMOTE
+import warnings
 
-# Suppress annoying warnings from XGBoost and sklearn
+# Silence XGBoost use_label_encoder warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="xgboost")
-warnings.filterwarnings("ignore", category=FutureWarning)
-os.environ["XGB_ENABLE_CPP_EXCEPTIONS"] = "1"
 
 mlflow.set_experiment("fraud_detection_stack")
 
+
 def load_data(filepath):
     return pd.read_csv(filepath)
+
 
 def preprocess_data(df):
     X = df.drop("Class", axis=1)
     y = df["Class"]
     return X, y
 
+
 def evaluate_model(y_test, y_pred, y_proba):
     print("\n Confusion Matrix:")
     print(confusion_matrix(y_test, y_pred))
+
     print("\n Classification Report:")
     print(classification_report(y_test, y_pred))
+
     roc_auc = roc_auc_score(y_test, y_proba)
     print(f"\n ROC-AUC Score: {roc_auc:.4f}")
     return roc_auc
+
 
 def get_git_commit_hash():
     try:
@@ -51,31 +56,35 @@ def get_git_commit_hash():
     except subprocess.CalledProcessError:
         return None
 
-def write_commit_tag(exp_id, model_folder_name, commit_hash):
-    """Create tags directory and write commit hash."""
-    tag_dir = os.path.join("mlruns", str(exp_id), "models", model_folder_name, "tags")
+
+def find_latest_model_folder(exp_id):
+    """Locate the most recent m-<uuid> model folder in mlruns/<exp_id>/models/"""
+    models_path = os.path.join("mlruns", str(exp_id), "models")
+    if not os.path.exists(models_path):
+        return None
+    m_folders = [f for f in os.listdir(models_path) if f.startswith("m-")]
+    if not m_folders:
+        return None
+    latest_folder = max(m_folders, key=lambda f: os.path.getctime(os.path.join(models_path, f)))
+    return latest_folder
+
+
+def write_commit_tag(exp_id, model_folder, commit_hash):
+    """Write commit hash to mlflow.source.git.commit inside model's tags folder"""
+    if not model_folder:
+        print(" Could not determine model folder for commit tag.")
+        return
+    tag_dir = os.path.join("mlruns", str(exp_id), "models", model_folder, "tags")
     os.makedirs(tag_dir, exist_ok=True)
     tag_file = os.path.join(tag_dir, "mlflow.source.git.commit")
     with open(tag_file, "w", encoding="utf-8") as f:
         f.write(commit_hash)
-    # Verification
     if os.path.exists(tag_file):
-        print(f" Commit tag written successfully → {tag_file}")
-    else:
-        print(" Commit tag write failed!")
+        print(f" Commit tag written successfully to {tag_file}")
 
-def find_new_model_folder(exp_id, before_folders):
-    """Find the new model folder created by MLflow by comparing before/after folder lists."""
-    models_dir = os.path.join("mlruns", str(exp_id), "models")
-    after_folders = set(os.listdir(models_dir)) if os.path.exists(models_dir) else set()
-    new_folders = after_folders - before_folders
-    for folder in new_folders:
-        if folder.startswith("m-"):
-            return folder
-    return None
 
 def train():
-    # Load data
+    # Load and preprocess
     df = load_data("data/creditcard.csv")
     X, y = preprocess_data(df)
     X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.3, random_state=42)
@@ -91,13 +100,7 @@ def train():
 
     # Models
     rf = RandomForestClassifier(n_estimators=100, random_state=42)
-    xgb = XGBClassifier(
-        n_estimators=100,
-        use_label_encoder=False,
-        eval_metric="logloss",
-        random_state=42,
-        verbosity=0  # Silence internal logs
-    )
+    xgb = XGBClassifier(n_estimators=100, eval_metric="logloss", random_state=42)
     meta_clf = LogisticRegression(max_iter=1000)
 
     stack_model = StackingClassifier(
@@ -123,34 +126,41 @@ def train():
 
         client = MlflowClient()
 
-        # Ensure registered model exists
+        # Step 1: Create Registered Model (safe if exists)
         try:
             client.create_registered_model("fraud_stack_model")
         except Exception:
-            pass  # Already exists
+            pass  # model already exists
 
-        # Snapshot existing model folders
-        models_dir = os.path.join("mlruns", str(run.info.experiment_id), "models")
-        before_folders = set(os.listdir(models_dir)) if os.path.exists(models_dir) else set()
+        # Step 2: Create Model Version → triggers folder creation
+        try:
+            client.create_model_version(
+                name="fraud_stack_model",
+                source=os.path.join(mlflow.get_artifact_uri(), "model"),
+                run_id=run.info.run_id
+            )
+        except Exception as e:
+            print(f" create_model_version failed: {e}")
 
-        # Force creation of model version
-        client.create_model_version(
-            name="fraud_stack_model",
-            source=mlflow.get_artifact_uri(),
-            run_id=run.info.run_id
-        )
+        # Step 3: Find actual model folder from filesystem
+        model_folder = find_latest_model_folder(run.info.experiment_id)
 
-        # Find the exact new model folder
-        model_folder_name = find_new_model_folder(run.info.experiment_id, before_folders)
+        # Step 4: Write commit tag before logging the model
+        if commit_hash:
+            write_commit_tag(run.info.experiment_id, model_folder, commit_hash)
 
-        # Pre-create commit tag
-        if commit_hash and model_folder_name:
-            write_commit_tag(run.info.experiment_id, model_folder_name, commit_hash)
-        elif commit_hash:
-            print("⚠ Could not determine model folder for commit tag.")
-
-        # Log model
+        # Step 5: Log model
         mlflow.sklearn.log_model(stack_model, artifact_path="model")
+
+        # Step 6: Post-run folder verification
+        if model_folder:
+            full_path = os.path.join("mlruns", str(run.info.experiment_id), "models", model_folder)
+            if os.path.exists(full_path):
+                print(f" Verified MLflow model folder exists: {full_path}")
+            else:
+                print(f" Model folder {full_path} not found after run.")
+        else:
+            print(" No model folder detected for verification.")
 
         # Save locally
         os.makedirs("models", exist_ok=True)
@@ -158,6 +168,7 @@ def train():
         joblib.dump(scaler, "models/scaler.pkl")
 
         print("\n Training complete. Model + Scaler saved.")
+
 
 if __name__ == "__main__":
     train()
