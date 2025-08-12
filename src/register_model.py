@@ -1,104 +1,169 @@
+# src/register_model.py
 import os
 import shutil
-import mlflow
-import mlflow.sklearn
-from mlflow.tracking import MlflowClient
+import tempfile
+import subprocess
 import joblib
-from datetime import datetime
+import yaml
+import mlflow
+from mlflow.tracking import MlflowClient
+import mlflow.sklearn
+import warnings
 
-# ===========================================
-# CONFIG — disable MLflow auto commit tag
-# ===========================================
-os.environ["MLFLOW_AUTOLOGGING_DISABLE"] = "1"
-os.environ["MLFLOW_DISABLE_ENV_MANAGER_CONDA_WARNING"] = "1"
-os.environ["MLFLOW_DISABLE_SOURCE_LOGGING"] = "1"
+# silence noisy warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 
-EXPERIMENT_NAME = "fraud_detection_stack"
-MODEL_NAME = "FraudDetectionModel"
-MODEL_DIR = "models/stack_model.pkl"
-COMMIT_HASH = "abc123def456"  # replace with actual `git rev-parse HEAD`
+# CONFIG
+EXPERIMENT = "fraud_detection_stack"
+REGISTERED_MODEL_NAME = "fraud_stack_model"
+LOCAL_MODEL_PICKLE = "models/stack_model.pkl"    # produced by train_model.py
+LOCAL_SCALER_PICKLE = "models/scaler.pkl"
+TEMP_SAVE_DIR = "temp_saved_model"               # temporary folder to save model before register
 
-# ===========================================
-# UTILS
-# ===========================================
-def find_model_uuid(base_path, version_number):
-    """
-    Find the m-<uuid> folder for a given model version by checking meta.yaml
-    """
-    models_path = os.path.join(base_path, "models")
-    if not os.path.exists(models_path):
+# Ensure MLflow doesn't keep an active run hanging
+if mlflow.active_run():
+    mlflow.end_run()
+
+mlflow.set_experiment(EXPERIMENT)
+
+
+def get_git_commit_hash():
+    try:
+        r = subprocess.run(["git", "rev-parse", "HEAD"], stdout=subprocess.PIPE, text=True, check=True)
+        return r.stdout.strip()
+    except Exception:
         return None
 
-    for folder in os.listdir(models_path):
-        if folder.startswith("m-"):
-            meta_path = os.path.join(models_path, folder, "meta.yaml")
-            if os.path.exists(meta_path):
-                with open(meta_path, "r") as f:
-                    content = f.read()
-                    if f"version: {version_number}" in content:
-                        return folder
+
+def save_model_locally(stack_model, save_dir):
+    """Save model to an explicit local folder MLflow can use as 'source'."""
+    # Remove any previous temp folder
+    if os.path.exists(save_dir):
+        shutil.rmtree(save_dir)
+    os.makedirs(save_dir, exist_ok=True)
+    # Use mlflow.sklearn.save_model which writes MLflow-compatible model folder
+    mlflow.sklearn.save_model(stack_model, path=save_dir)
+    return save_dir
+
+
+def find_model_folder_by_version(exp_id, version):
+    """Scan mlruns/<exp_id>/models for m-<uuid> with meta.yaml version == version."""
+    models_root = os.path.join("mlruns", str(exp_id), "models")
+    if not os.path.isdir(models_root):
+        return None
+    for entry in os.listdir(models_root):
+        if not entry.startswith("m-"):
+            continue
+        meta_path = os.path.join(models_root, entry, "meta.yaml")
+        if not os.path.isfile(meta_path):
+            continue
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = yaml.safe_load(f)
+            if str(meta.get("version")) == str(version):
+                return os.path.join(models_root, entry)
+        except Exception:
+            continue
     return None
 
-def write_commit_tag(model_folder, commit_hash):
-    """
-    Write commit hash to mlflow.source.git.commit file inside tags/
-    """
+
+def write_commit_tag_to_folder(model_folder, commit_hash):
     tags_dir = os.path.join(model_folder, "tags")
     os.makedirs(tags_dir, exist_ok=True)
-    commit_file = os.path.join(tags_dir, "mlflow.source.git.commit")
-    with open(commit_file, "w") as f:
+    tag_file = os.path.join(tags_dir, "mlflow.source.git.commit")
+    with open(tag_file, "w", encoding="utf-8") as f:
         f.write(commit_hash)
-    print(f"[INFO] Commit tag written to: {commit_file}")
+    return tag_file
 
-# ===========================================
-# MAIN
-# ===========================================
+
 def register_model():
-    mlflow.set_experiment(EXPERIMENT_NAME)
+    # Basic checks
+    if not os.path.exists(LOCAL_MODEL_PICKLE):
+        raise FileNotFoundError(f"Trained model not found: {LOCAL_MODEL_PICKLE}")
+
+    # Load trained model (from train_model.py)
+    stack_model = joblib.load(LOCAL_MODEL_PICKLE)
+
     client = MlflowClient()
 
-    # Ensure fresh run
-    if mlflow.active_run():
-        mlflow.end_run()
-
+    # Start fresh run
     with mlflow.start_run() as run:
-        # Load the trained model
-        if not os.path.exists(MODEL_DIR):
-            raise FileNotFoundError(f"Trained model not found at {MODEL_DIR}")
-        model = joblib.load(MODEL_DIR)
+        exp_id = run.info.experiment_id
+        run_id = run.info.run_id
+        print(f"[INFO] Started run {run_id} in experiment {exp_id}")
 
-        # Step 1: Log model without MLflow’s internal commit tag
-        print("[INFO] Logging model to MLflow...")
-        mlflow.sklearn.log_model(model, artifact_path="model")
+        # Save model to a local folder MLflow can register from
+        saved_path = save_model_locally(stack_model, TEMP_SAVE_DIR)
+        print(f"[INFO] Model saved locally to {saved_path} (ready for create_model_version)")
 
-        # Step 2: Register model
-        print("[INFO] Registering model version...")
-        model_uri = f"runs:/{run.info.run_id}/model"
+        # Create registered model (if missing)
+        try:
+            client.get_registered_model(REGISTERED_MODEL_NAME)
+        except Exception:
+            client.create_registered_model(REGISTERED_MODEL_NAME)
+            print(f"[INFO] Created registered model '{REGISTERED_MODEL_NAME}'")
+
+        # Create model version using local saved folder as source
+        # IMPORTANT: using local path as source avoids calling mlflow.sklearn.log_model() internals
         mv = client.create_model_version(
-            name=MODEL_NAME,
-            source=model_uri,
-            run_id=run.info.run_id
+            name=REGISTERED_MODEL_NAME,
+            source=os.path.abspath(saved_path),   # use absolute path
+            run_id=run_id
         )
-        print(f"[INFO] Model version {mv.version} created.")
+        print(f"[INFO] Created model version {mv.version} (source={saved_path})")
 
-        # Step 3: Locate m-<uuid> folder
-        base_path = os.path.join("mlruns", run.info.experiment_id)
-        model_uuid_folder = find_model_uuid(base_path, mv.version)
-        if not model_uuid_folder:
-            print("[ERROR] Could not locate m-<uuid> folder.")
-            return
+        # Find exact m-<uuid> folder by inspecting meta.yaml
+        model_folder = find_model_folder_by_version(exp_id, mv.version)
+        if model_folder is None:
+            print("⚠ Could not find m-<uuid> folder for the new version. Attempting to rescan...")
+            # try small rescans (timing)
+            import time
+            for _ in range(5):
+                time.sleep(0.5)
+                model_folder = find_model_folder_by_version(exp_id, mv.version)
+                if model_folder:
+                    break
 
-        model_folder_path = os.path.join(base_path, "models", model_uuid_folder)
+        if model_folder is None:
+            # Fallback: create a fallback folder under mlruns/<exp_id>/models/m-<runid>
+            fallback_name = f"m-fallback-{run_id[:8]}"
+            models_root = os.path.join("mlruns", str(exp_id), "models")
+            os.makedirs(os.path.join(models_root, fallback_name), exist_ok=True)
+            model_folder = os.path.join(models_root, fallback_name)
+            print(f"[WARN] Using fallback model folder: {model_folder}")
 
-        # Step 4: Write commit tag manually
-        write_commit_tag(model_folder_path, COMMIT_HASH)
-
-        # Step 5: Verify file exists
-        commit_path = os.path.join(model_folder_path, "tags", "mlflow.source.git.commit")
-        if os.path.exists(commit_path):
-            print(f"[SUCCESS] Commit tag file verified: {commit_path}")
+        # Write commit tag
+        commit_hash = get_git_commit_hash()
+        if commit_hash:
+            tag_file = write_commit_tag_to_folder(model_folder, commit_hash)
+            print(f"[OK] Wrote commit tag: {tag_file}")
         else:
-            print("[WARNING] Commit tag file missing after write!")
+            print("⚠ No git commit hash found; skipping commit tag write.")
+
+        # OPTIONAL: attach saved model folder as artifacts to run (no log_model)
+        # This will copy the saved model dir into the run's artifact location.
+        try:
+            mlflow.log_artifacts(saved_path, artifact_path="manual_model")
+            print(f"[INFO] Saved model artifacts logged to run under 'manual_model/'")
+        except Exception as e:
+            print(f"[WARN] Failed to log artifacts to run: {e}")
+
+        # Verification
+        commit_file_path = os.path.join(model_folder, "tags", "mlflow.source.git.commit")
+        if os.path.exists(commit_file_path):
+            print(f"[SUCCESS] Commit tag verified at: {commit_file_path}")
+        else:
+            print(f"[ERROR] Commit tag not found after write attempt: {commit_file_path}")
+
+        # Clean up temp saved folder if desired
+        try:
+            shutil.rmtree(saved_path)
+        except Exception:
+            pass
+
+    # End of run
+    print("[DONE] register_model finished.")
+
 
 if __name__ == "__main__":
     register_model()
