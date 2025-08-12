@@ -61,7 +61,7 @@ def register_model():
         print(f"[INFO] Started run {run_id} in experiment {exp_id}")
 
         # Load your trained model
-        stack_model = joblib.load("models/fraud_detection_stack.pkl")
+        model_path = "models/stack_model.pkl"  # Match train_model.py output
 
         # Save locally first
         temp_dir = tempfile.mkdtemp()
