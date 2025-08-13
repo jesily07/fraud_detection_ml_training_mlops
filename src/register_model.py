@@ -6,10 +6,6 @@ import mlflow
 import mlflow.sklearn
 from mlflow.tracking import MlflowClient
 import joblib
-from sklearn.ensemble import StackingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
 import subprocess
 
 EXPERIMENT_NAME = "fraud_detection_stack"
@@ -19,15 +15,14 @@ WAIT_FOR_FOLDER_SECONDS = 5
 
 def get_git_commit():
     try:
-        commit_hash = subprocess.check_output(
+        return subprocess.check_output(
             ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
         ).decode("utf-8").strip()
-        return commit_hash
     except Exception:
         return "unknown"
 
 def wait_for_model_folder(exp_id, version_number):
-    """Wait for the m-<uuid> folder to appear, retry for up to WAIT_FOR_FOLDER_SECONDS."""
+    """Wait for the m-<uuid> folder to appear, retry up to WAIT_FOR_FOLDER_SECONDS."""
     models_dir = os.path.join("mlruns", str(exp_id), "models")
     for _ in range(WAIT_FOR_FOLDER_SECONDS):
         if os.path.exists(models_dir):
@@ -60,10 +55,13 @@ def register_model():
         exp_id = run.info.experiment_id
         print(f"[INFO] Started run {run_id} in experiment {exp_id}")
 
-        # Load your trained model
-        model_path = "models/stack_model.pkl"  # Match train_model.py output
+        # Load the trained model from train_model.py output
+        model_path = "models/stack_model.pkl"
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Trained model not found at: {model_path}")
+        stack_model = joblib.load(model_path)
 
-        # Save locally first
+        # Save model to temp folder
         temp_dir = tempfile.mkdtemp()
         saved_path = os.path.join(temp_dir, "saved_model")
         mlflow.sklearn.save_model(stack_model, saved_path)
@@ -84,28 +82,27 @@ def register_model():
         )
         print(f"[INFO] Created model version {version.version} (source={saved_path})")
 
-        # Wait for real m-<uuid> folder
-        model_folder = wait_for_model_folder(exp_id, version.version)
-        if not model_folder:
-            fallback_name = f"m-fallback-{run_id[:8]}"
-            model_folder = os.path.join("mlruns", str(exp_id), "models", fallback_name)
-            os.makedirs(model_folder, exist_ok=True)
-            print(f"⚠ Could not find m-<uuid> folder after {WAIT_FOR_FOLDER_SECONDS}s. Using fallback: {model_folder}")
-
-        # Write commit tag
-        commit_hash = get_git_commit()
-        write_commit_tag(model_folder, commit_hash)
-
-        # Log artifacts *before* cleanup
+        # Log artifacts BEFORE cleanup
         try:
             mlflow.log_artifacts(saved_path, artifact_path="manual_model")
             print(f"[OK] Logged manual_model artifacts from {saved_path}")
         except Exception as e:
             print(f"[WARN] Failed to log artifacts: {e}")
 
-        # Clean up
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        # Find actual m-<uuid> folder or fallback
+        model_folder = wait_for_model_folder(exp_id, version.version)
+        if not model_folder:
+            fallback_name = f"m-fallback-{run_id[:8]}"
+            model_folder = os.path.join("mlruns", str(exp_id), "models", fallback_name)
+            os.makedirs(model_folder, exist_ok=True)
+            print(f" Could not find m-<uuid> folder. Using fallback: {model_folder}")
 
+        # Write commit tag
+        commit_hash = get_git_commit()
+        write_commit_tag(model_folder, commit_hash)
+
+        # Cleanup
+        shutil.rmtree(temp_dir, ignore_errors=True)
         print("[DONE] register_model finished.")
 
 if __name__ == "__main__":
