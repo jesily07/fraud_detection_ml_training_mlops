@@ -1,68 +1,67 @@
 import os
 import mlflow
 import mlflow.sklearn
+from mlflow.tracking import MlflowClient
 import joblib
 import subprocess
-import shutil
-from urllib.parse import urlparse
-
-def get_git_commit_hash():
-    try:
-        commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
-        return commit_hash
-    except Exception:
-        return "unknown_commit"
 
 def register_model():
-    # === Load trained model ===
-    model_path = "models/stack_model.pkl"
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"[ERROR] Model file not found at {model_path}")
-    stack_model = joblib.load(model_path)
-    print(f"[INFO] Loaded model from: {model_path}")
-
-    # === MLflow Setup ===
-    mlflow.set_experiment("fraud_detection_stack")
-    commit_hash = get_git_commit_hash()
-
+    # === Setup experiment ===
+    experiment_name = "fraud_detection_stack"
+    mlflow.set_experiment(experiment_name)
+    
     with mlflow.start_run() as run:
-        print(f"[INFO] Started run {run.info.run_id} in experiment fraud_detection_stack")
+        print(f"[INFO] Started run {run.info.run_id} in experiment {run.info.experiment_id}")
+
+        # === Load trained model ===
+        model_dir = "models"
+        stack_model_path = os.path.join(model_dir, "stack_model.pkl")
+        scaler_path = os.path.join(model_dir, "scaler.pkl")
+
+        if not all(map(os.path.exists, [stack_model_path, scaler_path])):
+            raise FileNotFoundError("Model or scaler file missing")
+
+        stack_model = joblib.load(stack_model_path)
+        scaler = joblib.load(scaler_path)
+
+        # === Log model and scaler ===
+        # Log model with additional artifacts
+        model_info = mlflow.sklearn.log_model(
+            sk_model=stack_model,
+            artifact_path="model",
+            registered_model_name="fraud_stack_model",
+            extra_pip_requirements=["scikit-learn", "joblib"],
+            artifacts={"scaler": scaler_path}  # Include scaler as artifact
+        )
+
+        # === Log scaler separately ===
+        mlflow.sklearn.log_model(scaler, "scaler")
+
+        # === Auto-capture git commit hash ===
+        try:
+            commit_hash = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], 
+                stderr=subprocess.DEVNULL
+            ).decode().strip()
+        except Exception:
+            commit_hash = "unknown"
+        
         print(f"[INFO] Using commit hash: {commit_hash}")
 
-        # Log model without registering immediately → avoids race condition bug
-        logged_model_info = mlflow.sklearn.log_model(
-            sk_model=stack_model,
-            artifact_path="fraud-stack-model"
-        )
-        print(f"[INFO] Model logged at: {logged_model_info.model_uri}")
-
-        # Register model from run URI
-        model_uri = f"runs:/{run.info.run_id}/fraud-stack-model"
-        registered_model = mlflow.register_model(model_uri=model_uri, name="fraud_stack_model")
-        print(f"[INFO] Created registered model 'fraud_stack_model' version {registered_model.version}")
-
-        # Tag commit hash in model registry
-        client = mlflow.tracking.MlflowClient()
+        # === Tag model version ===
+        client = MlflowClient()
+        model_name = "fraud_stack_model"
+        model_version = model_info.model_version
+        
         client.set_model_version_tag(
-            name="fraud_stack_model",
-            version=registered_model.version,
+            name=model_name,
+            version=model_version,
             key="mlflow.source.git.commit",
             value=commit_hash
         )
-        print(f"[OK] Tagged commit hash ({commit_hash}) to model version {registered_model.version}")
 
-    # === Local cleanup if tracking URI is file-based ===
-    tracking_uri = mlflow.get_tracking_uri()
-    scheme = urlparse(tracking_uri).scheme
-    if scheme in ("", "file"):
-        fallback_model_dir = os.path.join("mlruns", run.info.experiment_id, "models")
-        if os.path.exists(fallback_model_dir):
-            shutil.rmtree(fallback_model_dir, ignore_errors=True)
-            print(f"[CLEANUP] Removed local fallback model dir: {fallback_model_dir}")
-    else:
-        print("[CLEANUP] Skipped — remote tracking URI detected (cloud-safe)")
-
-    print("[DONE] register_model finished.")
+        print(f"[OK] Tagged model version {model_version} with commit hash")
+        print(f"[DONE] Model registered: {model_info.model_uri}")
 
 if __name__ == "__main__":
     register_model()
