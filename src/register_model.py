@@ -12,7 +12,7 @@ def register_model():
     with mlflow.start_run() as run:
         print(f"[INFO] Started run {run.info.run_id} in experiment {run.info.experiment_id}")
 
-        # === Load trained model and scaler ===
+        # === Load trained model ===
         model_dir = "models"
         stack_model_path = os.path.join(model_dir, "stack_model.pkl")
         scaler_path = os.path.join(model_dir, "scaler.pkl")
@@ -35,25 +35,21 @@ def register_model():
         print(f"[INFO] Using commit hash: {commit_hash}")
 
         # === Log and register model in one step ===
-        # The 'registered_model_name' parameter handles both logging to the run
-        # and registering a new model version in the MLflow Model Registry.
         logged_model_info = mlflow.sklearn.log_model(
             sk_model=stack_model,
             artifact_path="fraud-stack-model",
             registered_model_name="fraud_stack_model"
         )
-        print(f"[OK] Model logged and registered at: {logged_model_info.model_uri}")
 
         # === Add commit hash as a tag for this run ===
         mlflow.set_tag("mlflow.source.git.commit", commit_hash)
         print(f"[OK] Tagged run with commit hash: {commit_hash}")
 
         # === Optional: Log additional artifacts like scaler ===
-        # You can now log the scaler separately if needed.
         mlflow.log_artifact(scaler_path, artifact_path="preprocessing")
         print(f"[INFO] Logged scaler artifact from: {scaler_path}")
 
-    print(f"[DONE] register_model finished.")
+        print(f"[DONE] Model logged and registered at: {logged_model_info.model_uri}")
 
 
 if __name__ == "__main__":
