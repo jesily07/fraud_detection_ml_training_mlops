@@ -1,71 +1,67 @@
 import os
-import tempfile
 import mlflow
 import mlflow.sklearn
 import joblib
 import subprocess
+import shutil
+from urllib.parse import urlparse
 
-def register_model():
-    # === Setup experiment ===
-    experiment_name = "fraud_detection_stack"
-    mlflow.set_experiment(experiment_name)
-    run = mlflow.start_run()
-    print(f"[INFO] Started run {run.info.run_id} in experiment {run.info.experiment_id}")
-
-    # === Load trained model ===
-    model_dir = "models"
-    stack_model_path = os.path.join(model_dir, "stack_model.pkl")
-    scaler_path = os.path.join(model_dir, "scaler.pkl")
-
-    if not os.path.exists(stack_model_path):
-        raise FileNotFoundError(f"Stack model not found at {stack_model_path}")
-    if not os.path.exists(scaler_path):
-        raise FileNotFoundError(f"Scaler not found at {scaler_path}")
-
-    stack_model = joblib.load(stack_model_path)
-    scaler = joblib.load(scaler_path)
-
-    # === Save model to temp directory ===
-    saved_path = os.path.join(tempfile.mkdtemp(), "saved_model")
-    mlflow.sklearn.save_model(stack_model, saved_path)
-    print(f"[INFO] Model saved locally to {saved_path} (ready for create_model_version)")
-
-    # === Pre-log artifacts directly from saved_path BEFORE registry ===
-    try:
-        mlflow.log_artifacts(saved_path, artifact_path="manual_model")
-        print(f"[INFO] Pre-logged all artifacts from: {saved_path}")
-    except Exception as e:
-        print(f"[WARN] Could not pre-log artifacts from saved_path: {e}")
-
-    # === Auto-capture git commit hash ===
+def get_git_commit_hash():
     try:
         commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
+        return commit_hash
     except Exception:
-        commit_hash = "unknown"
-    print(f"[INFO] Using commit hash: {commit_hash}")
+        return "unknown_commit"
 
-    # === Register model ===
-    model_name = "fraud_stack_model"
-    mv = mlflow.register_model(
-        model_uri=f"file://{saved_path}",
-        name=model_name
-    )
+def register_model():
+    # === Load trained model ===
+    model_path = "models/stack_model.pkl"
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"[ERROR] Model file not found at {model_path}")
+    stack_model = joblib.load(model_path)
+    print(f"[INFO] Loaded model from: {model_path}")
 
-    # === Tag model version with commit hash ===
-    mv_folder = os.path.join("mlruns", str(run.info.experiment_id), "models", f"m-{mv.version}")
-    fallback_folder = os.path.join("mlruns", str(run.info.experiment_id), "models", f"m-fallback-{mv.version}")
+    # === MLflow Setup ===
+    mlflow.set_experiment("fraud_detection_stack")
+    commit_hash = get_git_commit_hash()
 
-    if os.path.exists(mv_folder):
-        tag_path = os.path.join(mv_folder, "tags", "mlflow.source.git.commit")
+    with mlflow.start_run() as run:
+        print(f"[INFO] Started run {run.info.run_id} in experiment fraud_detection_stack")
+        print(f"[INFO] Using commit hash: {commit_hash}")
+
+        # Log model without registering immediately → avoids race condition bug
+        logged_model_info = mlflow.sklearn.log_model(
+            sk_model=stack_model,
+            artifact_path="fraud-stack-model"
+        )
+        print(f"[INFO] Model logged at: {logged_model_info.model_uri}")
+
+        # Register model from run URI
+        model_uri = f"runs:/{run.info.run_id}/fraud-stack-model"
+        registered_model = mlflow.register_model(model_uri=model_uri, name="fraud_stack_model")
+        print(f"[INFO] Created registered model 'fraud_stack_model' version {registered_model.version}")
+
+        # Tag commit hash in model registry
+        client = mlflow.tracking.MlflowClient()
+        client.set_model_version_tag(
+            name="fraud_stack_model",
+            version=registered_model.version,
+            key="mlflow.source.git.commit",
+            value=commit_hash
+        )
+        print(f"[OK] Tagged commit hash ({commit_hash}) to model version {registered_model.version}")
+
+    # === Local cleanup if tracking URI is file-based ===
+    tracking_uri = mlflow.get_tracking_uri()
+    scheme = urlparse(tracking_uri).scheme
+    if scheme in ("", "file"):
+        fallback_model_dir = os.path.join("mlruns", run.info.experiment_id, "models")
+        if os.path.exists(fallback_model_dir):
+            shutil.rmtree(fallback_model_dir, ignore_errors=True)
+            print(f"[CLEANUP] Removed local fallback model dir: {fallback_model_dir}")
     else:
-        tag_path = os.path.join(fallback_folder, "tags", "mlflow.source.git.commit")
+        print("[CLEANUP] Skipped — remote tracking URI detected (cloud-safe)")
 
-    os.makedirs(os.path.dirname(tag_path), exist_ok=True)
-    with open(tag_path, "w") as f:
-        f.write(commit_hash)
-    print(f"[OK] Wrote commit tag ({commit_hash}) to: {tag_path}")
-
-    mlflow.end_run()
     print("[DONE] register_model finished.")
 
 if __name__ == "__main__":
