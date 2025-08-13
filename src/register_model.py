@@ -2,14 +2,26 @@ import os
 import mlflow
 import joblib
 import tempfile
+import subprocess
 from mlflow.tracking import MlflowClient
+
+def get_git_commit_hash():
+    """Fetch the latest Git commit hash."""
+    try:
+        commit_hash = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], stderr=subprocess.STDOUT
+        ).decode("utf-8").strip()
+        return commit_hash
+    except Exception as e:
+        print(f"[WARN] Could not fetch Git commit hash: {e}")
+        return "unknown_commit"
 
 def register_model():
     # === Config ===
     experiment_name = "fraud_detection_stack"
     model_name = "fraud_stack_model"
     model_file = "models/stack_model.pkl"
-    git_commit_hash = "YOUR_COMMIT_HASH"  # Replace or fetch dynamically
+    git_commit_hash = get_git_commit_hash()
 
     # === Ensure experiment exists ===
     mlflow.set_experiment(experiment_name)
@@ -31,7 +43,7 @@ def register_model():
         mlflow.sklearn.save_model(stack_model, saved_path)
         print(f"[INFO] Model saved locally to {saved_path} (ready for create_model_version)")
 
-        # === Pre-log artifacts from saved_path (no file name assumptions) ===
+        # === Pre-log artifacts from saved_path ===
         try:
             mlflow.log_artifacts(saved_path, artifact_path="manual_model")
             print(f"[INFO] Pre-logged all artifacts from: {saved_path}")
@@ -74,7 +86,7 @@ def register_model():
         os.makedirs(tags_dir, exist_ok=True)
         with open(os.path.join(tags_dir, "mlflow.source.git.commit"), "w") as f:
             f.write(git_commit_hash)
-        print(f"[OK] Wrote commit tag to: {tags_dir}")
+        print(f"[OK] Wrote commit tag ({git_commit_hash}) to: {tags_dir}")
 
         print("[DONE] register_model finished.")
 
