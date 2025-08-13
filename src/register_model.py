@@ -1,72 +1,47 @@
 import os
-import tempfile
 import mlflow
 import mlflow.sklearn
 import joblib
 import subprocess
 
 def register_model():
-    # === Setup experiment ===
     experiment_name = "fraud_detection_stack"
     mlflow.set_experiment(experiment_name)
-    run = mlflow.start_run()
-    print(f"[INFO] Started run {run.info.run_id} in experiment {run.info.experiment_id}")
 
-    # === Load trained model ===
-    model_dir = "models"
-    stack_model_path = os.path.join(model_dir, "stack_model.pkl")
-    scaler_path = os.path.join(model_dir, "scaler.pkl")
+    with mlflow.start_run() as run:
+        print(f"[INFO] Started run {run.info.run_id} in experiment {run.info.experiment_id}")
 
-    if not os.path.exists(stack_model_path):
-        raise FileNotFoundError(f"Stack model not found at {stack_model_path}")
-    if not os.path.exists(scaler_path):
-        raise FileNotFoundError(f"Scaler not found at {scaler_path}")
+        # Load locally saved artifacts from train step
+        model_dir = "models"
+        stack_model_path = os.path.join(model_dir, "stack_model.pkl")
+        scaler_path = os.path.join(model_dir, "scaler.pkl")
 
-    stack_model = joblib.load(stack_model_path)
-    scaler = joblib.load(scaler_path)
+        stack_model = joblib.load(stack_model_path)
+        scaler = joblib.load(scaler_path)
 
-    # === Save model to temp directory ===
-    saved_path = os.path.join(tempfile.mkdtemp(), "saved_model")
-    mlflow.sklearn.save_model(stack_model, saved_path)
-    print(f"[INFO] Model saved locally to {saved_path} (ready for create_model_version)")
+        # Auto-capture Git commit hash
+        try:
+            commit_hash = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"]
+            ).decode("utf-8").strip()
+        except Exception:
+            commit_hash = "unknown"
 
-    # === Pre-log artifacts directly from saved_path BEFORE registry ===
-    try:
-        mlflow.log_artifacts(saved_path, artifact_path="manual_model")
-        print(f"[INFO] Pre-logged all artifacts from: {saved_path}")
-    except Exception as e:
-        print(f"[WARN] Could not pre-log artifacts from saved_path: {e}")
+        # Log scaler as an extra artifact
+        mlflow.log_artifact(scaler_path, artifact_path="preprocessing")
 
-    # === Auto-capture git commit hash ===
-    try:
-        commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
-    except Exception:
-        commit_hash = "unknown"
-    print(f"[INFO] Using commit hash: {commit_hash}")
+        # Log and register the model in one call
+        logged_model_info = mlflow.sklearn.log_model(
+            sk_model=stack_model,
+            artifact_path="fraud-stack-model",
+            registered_model_name="fraud_stack_model"
+        )
 
-    # === Register model ===
-    model_name = "fraud_stack_model"
-    mv = mlflow.register_model(
-        model_uri=f"file://{saved_path}",
-        name=model_name
-    )
+        # Add commit hash as a tag
+        mlflow.set_tag("mlflow.source.git.commit", commit_hash)
 
-    # === Tag model version with commit hash ===
-    mv_folder = os.path.join("mlruns", str(run.info.experiment_id), "models", f"m-{mv.version}")
-    fallback_folder = os.path.join("mlruns", str(run.info.experiment_id), "models", f"m-fallback-{mv.version}")
-
-    if os.path.exists(mv_folder):
-        tag_path = os.path.join(mv_folder, "tags", "mlflow.source.git.commit")
-    else:
-        tag_path = os.path.join(fallback_folder, "tags", "mlflow.source.git.commit")
-
-    os.makedirs(os.path.dirname(tag_path), exist_ok=True)
-    with open(tag_path, "w") as f:
-        f.write(commit_hash)
-    print(f"[OK] Wrote commit tag ({commit_hash}) to: {tag_path}")
-
-    mlflow.end_run()
-    print("[DONE] register_model finished.")
+        print(f"[INFO] Model logged and registered at URI: {logged_model_info.model_uri}")
+        print(f"[OK] Commit hash tagged: {commit_hash}")
 
 if __name__ == "__main__":
     register_model()
