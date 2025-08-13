@@ -1,4 +1,6 @@
 # train_model.py
+import os
+import warnings
 import pandas as pd
 import joblib
 from sklearn.model_selection import train_test_split
@@ -8,6 +10,10 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
 from xgboost import XGBClassifier
 from imblearn.over_sampling import SMOTE
+
+# Suppress warnings for cleaner logs
+warnings.filterwarnings("ignore", category=UserWarning)
+os.environ["PYTHONWARNINGS"] = "ignore"
 
 def load_data(filepath):
     return pd.read_csv(filepath)
@@ -42,7 +48,10 @@ def train():
 
     rf = RandomForestClassifier(n_estimators=100, random_state=42)
     xgb = XGBClassifier(
-        n_estimators=100, use_label_encoder=False, eval_metric="logloss", random_state=42
+        n_estimators=100,
+        use_label_encoder=False,  # Avoids old XGBoost warning
+        eval_metric="logloss",
+        random_state=42
     )
     meta_clf = LogisticRegression(max_iter=1000)
 
@@ -58,11 +67,21 @@ def train():
     y_proba = stack_model.predict_proba(X_test_scaled)[:, 1]
     evaluate_model(y_test, y_pred, y_proba)
 
-    # Save artifacts for registration step
-    joblib.dump(stack_model, "models/stack_model.pkl")
-    joblib.dump(scaler, "models/scaler.pkl")
+    # Ensure models directory exists
+    model_dir = "models"
+    os.makedirs(model_dir, exist_ok=True)
 
-    print("\n Training complete. Artifacts saved to 'models/'.")
+    # Save to fixed location for MLOps consistency
+    model_path = os.path.join(model_dir, "stack_model.pkl")
+    joblib.dump(stack_model, model_path)
+    print(f"[INFO] Model saved to: {model_path}")
+
+    # Optional: Save scaler
+    scaler_path = os.path.join(model_dir, "scaler.pkl")
+    joblib.dump(scaler, scaler_path)
+    print(f"[INFO] Scaler saved to: {scaler_path}")
+
+    print("\n[INFO] Training complete. Artifacts ready for registration.")
 
 if __name__ == "__main__":
     train()
