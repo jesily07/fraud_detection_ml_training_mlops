@@ -1,1 +1,70 @@
-"data/creditcard.csv" 
+# ============================
+# Python ignores
+# ============================
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# ============================
+# Virtual environments
+# ============================
+.venv/
+venv/
+ENV/
+env/
+*.env
+*.venv
+
+# ============================
+# Jupyter & IPython
+# ============================
+.ipynb_checkpoints/
+*.ipynb_convert/
+.profile_default/
+.ipython/
+
+# ============================
+# ML / DS project artifacts
+# ============================
+mlruns/                # MLflow local runs (handled outside Git)
+model/                 # Local model artifacts
+models/                # Trained models directory
+outputs/
+logs/
+checkpoints/
+runs/
+
+# ============================
+# Data files
+# ============================
+data/                  # ignore all data folder contents
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.h5
+*.pkl
+*.joblib
+*.npy
+*.npz
+
+# ============================
+# System / IDE files
+# ============================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# ============================
+# Environment configs
+# ============================
+*.log
+*.yaml
+*.yml
+*.json
