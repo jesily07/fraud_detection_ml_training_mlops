@@ -1,2 +1,41 @@
-*.csv filter=lfs diff=lfs merge=lfs -text
-data/creditcard.csv filter=lfs diff=lfs merge=lfs -text
+# ============================
+# Text files (normalized line endings)
+# ============================
+* text=auto eol=lf
+# ============================
+# Python scripts
+# ============================
+*.py text diff=python
+# ============================
+# Jupyter notebooks
+# ============================
+*.ipynb text
+# ============================
+# Configuration files
+# ============================
+*.yml text
+*.yaml text
+*.json text
+*.toml text
+*.cfg text
+*.ini text
+# ============================
+# Documentation
+# ============================
+*.md text
+*.rst text
+LICENSE text
+# ============================
+# Git LFS (Large Files for ML models & artifacts)
+# ============================
+*.pkl filter=lfs diff=lfs merge=lfs -text
+*.joblib filter=lfs diff=lfs merge=lfs -text
+*.h5 filter=lfs diff=lfs merge=lfs -text
+*.pt filter=lfs diff=lfs merge=lfs -text
+*.onnx filter=lfs diff=lfs merge=lfs -text
+*.ckpt filter=lfs diff=lfs merge=lfs -text
+# ============================
+# Windows filename length handling
+# ============================
+# Prevents long path issues on Windows
+* -text
