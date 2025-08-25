@@ -4,7 +4,7 @@
 scikit-learn==1.2.2         # Stable with imbalanced-learn
 imbalanced-learn==0.10.1    # Compatible with sklearn 1.2.2
 numpy==1.26.4               # Latest <2.0 (safe with sklearn & MLflow)
-pandas==2.2.2
+pandas==2.1.4
 scipy==1.12.0
 matplotlib==3.8.4
 seaborn==0.13.2

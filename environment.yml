@@ -1,23 +1,46 @@
-name: clean_env
+name: fraud-detection-mlops
+
 channels:
   - conda-forge
-  - defaults
+
 dependencies:
+  # Core Python
   - python=3.10
   - pip
-  - numpy
-  - pandas
-  - matplotlib
-  - seaborn
-  - scikit-learn=1.3.2
-  - jupyter
-  - notebook
+
+  # Data science essentials
+  - numpy=1.26.4
+  - pandas=2.1.4
+  - scikit-learn=1.2.2
+  - imbalanced-learn=0.10.1
+  - scipy=1.11.4
+
+  # Gradient boosting libraries
+  - xgboost=1.7.6
+  - lightgbm=4.1.0
+  - catboost=1.2.3
+
+  # Visualization
+  - matplotlib=3.8.2
+  - seaborn=0.13.2
+
+  # Experiment tracking & ML pipeline
+  - mlflow=2.11.3
+  - optuna=3.5.0
+  - shap=0.44.1
+
+  # Jupyter + Kernel
+  - jupyterlab
   - ipykernel
-  - opencv
+
+  # System / helpers
+  - pyyaml
+  - joblib
+  - tqdm
+
+  # Install pip extras if needed
   - pip:
+      # TensorFlow pinned for compatibility
       - tensorflow==2.15.0
-      - imbalanced-learn==0.11.0
-      - mlflow
-      - tqdm
-      - joblib
-      - pyyaml
+      # PyTorch if you want for deep models (optional)
+      # - torch==2.2.0
