@@ -1,70 +1,61 @@
 # ============================
-# Python ignores
+# Python cache & env
 # ============================
 __pycache__/
 *.py[cod]
+*.pyo
 *.so
-*.egg
 *.egg-info/
-dist/
-build/
-
-# ============================
-# Virtual environments
-# ============================
-.venv/
-venv/
-ENV/
-env/
+.eggs/
+.env
+.venv
 *.env
 *.venv
-
-# ============================
-# Jupyter & IPython
-# ============================
+.envrc
 .ipynb_checkpoints/
-*.ipynb_convert/
-.profile_default/
-.ipython/
+.DS_Store
 
 # ============================
-# ML / DS project artifacts
+# Logs & temp files
 # ============================
-mlruns/                # MLflow local runs (handled outside Git)
-model/                 # Local model artifacts
-models/                # Trained models directory
-outputs/
-logs/
-checkpoints/
-runs/
+*.log
+*.out
+*.err
+nohup.out
+*.tmp
+*.swp
+*.swo
+
+# ============================
+# Jupyter / VSCode
+# ============================
+.ipynb_checkpoints
+.vscode/
+.idea/
 
 # ============================
 # Data files
 # ============================
-data/                  # ignore all data folder contents
+data/
 *.csv
 *.tsv
 *.parquet
-*.feather
 *.h5
 *.pkl
 *.joblib
-*.npy
-*.npz
 
 # ============================
-# System / IDE files
+# MLflow & artifact
 # ============================
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-*.swp
+mlruns/
+artifacts_tmp/
+models/
+model/
 
 # ============================
-# Environment configs
+# Build / dist
 # ============================
-*.log
-*.yaml
-*.yml
-*.json
+dist/
+build/
+*.tar.gz
+*.whl

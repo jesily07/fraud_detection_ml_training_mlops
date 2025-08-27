@@ -39,3 +39,9 @@ LICENSE text
 # ============================
 # Prevents long path issues on Windows
 * -text
+# ============================
+# MLflow & temporary artifacts
+# ============================
+mlruns/**        -text
+artifacts_tmp/** -text
+models/**        -text
