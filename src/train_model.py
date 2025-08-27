@@ -1,128 +1,150 @@
 # train_model.py +  MLflow logging + confusion matrix artifact + ROC Curve
 
+# train_model.py
 import os
-import mlflow
-import matplotlib.pyplot as plt
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score, roc_auc_score,
-    confusion_matrix, ConfusionMatrixDisplay, roc_curve, auc
-)
+import warnings
+import joblib
 import pandas as pd
-import numpy as np
+import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, StackingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+    roc_auc_score,
+    roc_curve,
+)
+from xgboost import XGBClassifier
 from imblearn.over_sampling import SMOTE
-import joblib
+import mlflow
+import mlflow.sklearn
 
-# =========================
-# Helper Functions
-# =========================
+# Suppress warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+os.environ["PYTHONWARNINGS"] = "ignore"
 
-def log_confusion_matrix(y_true, y_pred, run_id):
-    """Generate and log confusion matrix plot as MLflow artifact."""
-    cm = confusion_matrix(y_true, y_pred)
-    disp = ConfusionMatrixDisplay(cm)
-    disp.plot(cmap="Blues")
+mlflow.set_experiment("fraud_detection_stack")
 
-    cm_path = f"confusion_matrix_{run_id}.png"
-    plt.savefig(cm_path, dpi=120, bbox_inches="tight")
-    plt.close()
+def load_data(filepath):
+    return pd.read_csv(filepath)
 
-    # Ensure MLflow artifact subdir exists
-    artifact_dir = os.path.join("mlruns", "0", run_id, "artifacts", "plots")
-    os.makedirs(artifact_dir, exist_ok=True)
-
-    mlflow.log_artifact(cm_path, artifact_path="plots")
-    os.remove(cm_path)
-
-
-def log_roc_curve(y_true, y_pred_proba, run_id):
-    """Generate and log ROC curve plot as MLflow artifact."""
-    fpr, tpr, _ = roc_curve(y_true, y_pred_proba)
-    roc_auc = auc(fpr, tpr)
-
-    plt.figure()
-    plt.plot(fpr, tpr, color="darkorange", lw=2, label=f"ROC curve (area = {roc_auc:.2f})")
-    plt.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title("Receiver Operating Characteristic")
-    plt.legend(loc="lower right")
-
-    roc_path = f"roc_curve_{run_id}.png"
-    plt.savefig(roc_path, dpi=120, bbox_inches="tight")
-    plt.close()
-
-    # Ensure MLflow artifact subdir exists
-    artifact_dir = os.path.join("mlruns", "0", run_id, "artifacts", "plots")
-    os.makedirs(artifact_dir, exist_ok=True)
-
-    mlflow.log_artifact(roc_path, artifact_path="plots")
-    os.remove(roc_path)
-
-
-# =========================
-# Training Function
-# =========================
-def train():
-    # Load dataset
-    df = pd.read_csv("data/creditcard.csv")
+def preprocess_data(df):
     X = df.drop("Class", axis=1)
     y = df["Class"]
+    return X, y
 
-    # Train-test split
+def log_confusion_matrix(y_true, y_pred, run_id):
+    cm = confusion_matrix(y_true, y_pred)
+    fig, ax = plt.subplots(figsize=(5, 4))
+    ax.imshow(cm, cmap="Blues")
+    ax.set_title("Confusion Matrix")
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("Actual")
+
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax.text(j, i, cm[i, j], ha="center", va="center", color="red")
+
+    os.makedirs("artifacts_tmp", exist_ok=True)
+    cm_path = f"artifacts_tmp/confusion_matrix_{run_id}.png"
+    plt.savefig(cm_path)
+    plt.close()
+    mlflow.log_artifact(cm_path, artifact_path="plots")
+
+def log_roc_curve(y_true, y_proba, run_id):
+    fpr, tpr, _ = roc_curve(y_true, y_proba)
+    fig, ax = plt.subplots(figsize=(6, 5))
+    ax.plot(fpr, tpr, label="ROC curve")
+    ax.plot([0, 1], [0, 1], "k--", label="Random")
+    ax.set_xlabel("False Positive Rate")
+    ax.set_ylabel("True Positive Rate")
+    ax.set_title("ROC Curve")
+    ax.legend()
+
+    os.makedirs("artifacts_tmp", exist_ok=True)
+    roc_path = f"artifacts_tmp/roc_curve_{run_id}.png"
+    plt.savefig(roc_path)
+    plt.close()
+    mlflow.log_artifact(roc_path, artifact_path="plots")
+
+def train():
+    df = load_data("data/creditcard.csv")
+    X, y = preprocess_data(df)
+
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+        X, y, stratify=y, test_size=0.3, random_state=42
     )
 
-    # Scale
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
-    # Handle imbalance
     sm = SMOTE(random_state=42)
     X_train_res, y_train_res = sm.fit_resample(X_train_scaled, y_train)
 
-    # Train model
-    clf = RandomForestClassifier(n_estimators=100, random_state=42)
-    clf.fit(X_train_res, y_train_res)
+    rf = RandomForestClassifier(n_estimators=100, random_state=42)
+    xgb = XGBClassifier(
+        n_estimators=100,
+        use_label_encoder=False,
+        eval_metric="logloss",
+        random_state=42,
+    )
+    meta_clf = LogisticRegression(max_iter=1000)
 
-    # Predictions
-    y_pred = clf.predict(X_test_scaled)
-    y_pred_proba = clf.predict_proba(X_test_scaled)[:, 1]
+    stack_model = StackingClassifier(
+        estimators=[("rf", rf), ("xgb", xgb)],
+        final_estimator=meta_clf,
+        cv=5,
+        n_jobs=-1,
+    )
 
-    # Metrics
-    accuracy = accuracy_score(y_test, y_pred)
-    precision = precision_score(y_test, y_pred, zero_division=0)
-    recall = recall_score(y_test, y_pred, zero_division=0)
-    f1 = f1_score(y_test, y_pred, zero_division=0)
-    roc_auc = roc_auc_score(y_test, y_pred_proba)
-
-    # MLflow logging
     with mlflow.start_run() as run:
         run_id = run.info.run_id
-        mlflow.log_metric("accuracy", accuracy)
-        mlflow.log_metric("precision", precision)
-        mlflow.log_metric("recall", recall)
+        stack_model.fit(X_train_res, y_train_res)
+
+        y_pred = stack_model.predict(X_test_scaled)
+        y_proba = stack_model.predict_proba(X_test_scaled)[:, 1]
+
+        # Metrics
+        acc = accuracy_score(y_test, y_pred)
+        prec = precision_score(y_test, y_pred)
+        rec = recall_score(y_test, y_pred)
+        f1 = f1_score(y_test, y_pred)
+        roc_auc = roc_auc_score(y_test, y_proba)
+
+        print(
+            f"[INFO] Metrics logged: Accuracy={acc:.4f}, "
+            f"Precision={prec:.4f}, Recall={rec:.4f}, "
+            f"F1={f1:.4f}, ROC-AUC={roc_auc:.4f}"
+        )
+
+        mlflow.log_metric("accuracy", acc)
+        mlflow.log_metric("precision", prec)
+        mlflow.log_metric("recall", rec)
         mlflow.log_metric("f1", f1)
         mlflow.log_metric("roc_auc", roc_auc)
 
-        print(f"[INFO] Metrics logged: Accuracy={accuracy:.4f}, Precision={precision:.4f}, "
-              f"Recall={recall:.4f}, F1={f1:.4f}, ROC-AUC={roc_auc:.4f}")
-
-        # Save model + scaler
+        # Save & log models
         os.makedirs("models", exist_ok=True)
-        joblib.dump(clf, "models/stack_model.pkl")
-        joblib.dump(scaler, "models/scaler.pkl")
-        print("[INFO] Model saved to: models/stack_model.pkl")
-        print("[INFO] Scaler saved to: models/scaler.pkl")
+        model_path = os.path.join("models", "stack_model.pkl")
+        scaler_path = os.path.join("models", "scaler.pkl")
+        joblib.dump(stack_model, model_path)
+        joblib.dump(scaler, scaler_path)
 
-        # Log artifacts
+        mlflow.sklearn.log_model(stack_model, "model")
+        mlflow.log_artifact(model_path, artifact_path="models")
+        mlflow.log_artifact(scaler_path, artifact_path="models")
+
+        # Log plots
         log_confusion_matrix(y_test, y_pred, run_id)
-        log_roc_curve(y_test, y_pred_proba, run_id)
+        log_roc_curve(y_test, y_proba, run_id)
 
+        print("\n[INFO] Training complete. Artifacts logged in MLflow.")
 
 if __name__ == "__main__":
     train()
