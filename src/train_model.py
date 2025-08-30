@@ -72,11 +72,17 @@ def train():
     model_dir = "models"
     os.makedirs(model_dir, exist_ok=True)
 
-    # Save model + scaler
-    joblib.dump(stack_model, os.path.join(model_dir, "stack_model.pkl"))
-    joblib.dump(scaler, os.path.join(model_dir, "scaler.pkl"))
+    # Save trained model
+    model_path = os.path.join(model_dir, "stack_model.pkl")
+    joblib.dump(stack_model, model_path)
+    print(f"[INFO] Model saved to: {model_path}")
 
-    # 🔹 Save test data for reproducible evaluation
+    # Save scaler
+    scaler_path = os.path.join(model_dir, "scaler.pkl")
+    joblib.dump(scaler, scaler_path)
+    print(f"[INFO] Scaler saved to: {scaler_path}")
+
+    # Save test data for reproducibility
     test_data_path = os.path.join(model_dir, "test_data.pkl")
     joblib.dump((X_test_scaled, y_test), test_data_path)
     print(f"[INFO] Test data saved to: {test_data_path}")
