@@ -1,76 +1,87 @@
 # train_model.py
 
 import os
-import joblib
-import mlflow
-import mlflow.sklearn
 import warnings
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, StackingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-from imblearn.over_sampling import SMOTE
 import pandas as pd
+import joblib
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier, StackingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+from xgboost import XGBClassifier
+from imblearn.over_sampling import SMOTE
 
-# ==============================
-# CONFIGURATION
-# ==============================
-EXPERIMENT_NAME = "fraud_detection_stack"
-MODEL_DIR = "models"
-os.makedirs(MODEL_DIR, exist_ok=True)
-
+# Suppress warnings for cleaner logs
 warnings.filterwarnings("ignore", category=UserWarning)
 os.environ["PYTHONWARNINGS"] = "ignore"
 
+def load_data(filepath):
+    return pd.read_csv(filepath)
+
+def preprocess_data(df):
+    X = df.drop("Class", axis=1)
+    y = df["Class"]
+    return X, y 
+
+def evaluate_model(y_test, y_pred, y_proba):
+    print("\n Confusion Matrix:")
+    print(confusion_matrix(y_test, y_pred))
+    print("\n Classification Report:")
+    print(classification_report(y_test, y_pred))
+    roc_auc = roc_auc_score(y_test, y_proba)
+    print(f"\n ROC-AUC Score: {roc_auc:.4f}")
+    return roc_auc
 
 def train():
-    # Load dataset
-    df = pd.read_csv("data/creditcard.csv")
-    X, y = df.drop("Class", axis=1), df["Class"]
-
-    # Train-test split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
-
-    # Handle imbalance with SMOTE
-    smote = SMOTE(random_state=42)
-    X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
-
-    # Scale features
-    scaler = StandardScaler()
-    X_train_res = scaler.fit_transform(X_train_res)
-    X_test = scaler.transform(X_test)
-
-    # Base models
-    rf = RandomForestClassifier(n_estimators=200, random_state=42)
-    gb = GradientBoostingClassifier(n_estimators=200, random_state=42)
-
-    # Meta-model
-    stack_model = StackingClassifier(
-        estimators=[("rf", rf), ("gb", gb)],
-        final_estimator=LogisticRegression(max_iter=1000),
-        cv=5
+    df = load_data("data/creditcard.csv")
+    X, y = preprocess_data(df)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, stratify=y, test_size=0.3, random_state=42
     )
 
-    # MLflow experiment
-    mlflow.set_experiment(EXPERIMENT_NAME)
-    with mlflow.start_run(run_name="train_fraud_stack") as run:
-        stack_model.fit(X_train_res, y_train_res)
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
 
-        # Save locally
-        model_path = os.path.join(MODEL_DIR, "stack_model.pkl")
-        scaler_path = os.path.join(MODEL_DIR, "scaler.pkl")
-        joblib.dump(stack_model, model_path)
-        joblib.dump(scaler, scaler_path)
+    sm = SMOTE(random_state=42)
+    X_train_res, y_train_res = sm.fit_resample(X_train_scaled, y_train)
 
-        print(f"[INFO] Model saved to: {model_path}")
-        print(f"[INFO] Scaler saved to: {scaler_path}")
+    rf = RandomForestClassifier(n_estimators=100, random_state=42)
+    xgb = XGBClassifier(
+        n_estimators=100,
+        use_label_encoder=False,
+        eval_metric="logloss",
+        random_state=42
+    )
+    meta_clf = LogisticRegression(max_iter=1000)
 
-        # Log model to MLflow
-        mlflow.sklearn.log_model(stack_model, "model")
+    stack_model = StackingClassifier(
+        estimators=[("rf", rf), ("xgb", xgb)],
+        final_estimator=meta_clf,
+        cv=5,
+        n_jobs=-1
+    )
 
-    # Return test set for evaluation
-    return X_test, y_test, stack_model
+    stack_model.fit(X_train_res, y_train_res)
+    y_pred = stack_model.predict(X_test_scaled)
+    y_proba = stack_model.predict_proba(X_test_scaled)[:, 1]
+    evaluate_model(y_test, y_pred, y_proba)
 
+    # Ensure models directory exists
+    model_dir = "models"
+    os.makedirs(model_dir, exist_ok=True)
+
+    # Save model + scaler
+    joblib.dump(stack_model, os.path.join(model_dir, "stack_model.pkl"))
+    joblib.dump(scaler, os.path.join(model_dir, "scaler.pkl"))
+
+    # 🔹 Save test data for reproducible evaluation
+    test_data_path = os.path.join(model_dir, "test_data.pkl")
+    joblib.dump((X_test_scaled, y_test), test_data_path)
+    print(f"[INFO] Test data saved to: {test_data_path}")
+
+    print("\n[INFO] Training complete. Artifacts ready for registration/evaluation.")
 
 if __name__ == "__main__":
     train()
