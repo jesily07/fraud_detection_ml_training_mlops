@@ -2,6 +2,7 @@
 # Python cache & env
 # ============================
 __pycache__/
+*.pyc
 *.py[cod]
 *.pyo
 *.so
@@ -36,13 +37,17 @@ nohup.out
 # ============================
 # Data files
 # ============================
-data/
+/data/              # ignore only top-level data folder
 *.csv
 *.tsv
 *.parquet
 *.h5
 *.pkl
 *.joblib
+
+# Allow source code under src/data/
+!src/data/
+!src/data/*.py
 
 # ============================
 # MLflow & artifact
