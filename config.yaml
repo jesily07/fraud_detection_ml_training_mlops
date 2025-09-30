@@ -1,1 +1,33 @@
+project:
+  name: fraud-detection-mlops
+  version: 1.0.0
+  author: "Your Name"
+  description: "Fraud detection pipeline with MLflow tracking and FastAPI serving"
 
+data:
+  raw_path: data/raw/creditcard.csv
+  processed_path: data/processed/
+  features_store: data/features/
+  train_split: 0.8
+  random_seed: 42
+
+model:
+  type: xgboost
+  params:
+    learning_rate: 0.1
+    max_depth: 6
+    n_estimators: 200
+    subsample: 0.8
+    colsample_bytree: 0.8
+  save_dir: models/
+
+mlflow:
+  tracking_uri: http://localhost:5000
+  experiment_name: fraud-detection
+  registered_model_name: fraud-detection-model
+
+api:
+  host: 0.0.0.0
+  port: 8080
+  enable_auth: true
+  request_timeout: 30

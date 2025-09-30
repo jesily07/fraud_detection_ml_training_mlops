@@ -1,0 +1,41 @@
+# Ignore Python cache & artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+
+# Ignore virtual environments
+.venv/
+env/
+venv/
+
+# Ignore Jupyter notebooks (not needed inside container)
+notebooks/
+*.ipynb
+.ipynb_checkpoints/
+
+# Ignore local datasets & models (mounted at runtime instead)
+data/
+models/
+
+# Ignore local dev configs
+*.env
+.env.*
+*.yaml
+*.yml
+
+# Ignore build / log files
+*.log
+*.out
+*.tmp
+*.swp
+
+# Ignore system / IDE files
+.DS_Store
+.vscode/
+.idea/
+
+# Ignore Git metadata
+.git/
+.gitignore
